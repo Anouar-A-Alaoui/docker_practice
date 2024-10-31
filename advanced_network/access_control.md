@@ -54,3 +54,127 @@ DROP       all  --  0.0.0.0/0            0.0.0.0/0
 ```
 
 注意：`--link=CONTAINER_NAME:ALIAS` 中的 `CONTAINER_NAME` 目前必须是 Docker 分配的名字，或使用 `--name` 参数指定的名字。主机名则不会被识别。
+
+
+----------------------------------------------
+
+
+
+# Container Access Control
+
+Container access control is primarily managed and implemented using the `iptables` firewall on Linux. `iptables` is the default firewall software on Linux and comes pre-installed on most distributions.
+
+## Container Access to External Networks
+For containers to access external networks, the local system needs forwarding support. On Linux systems, check if forwarding is enabled.
+
+```bash
+$ sysctl net.ipv4.ip_forward
+net.ipv4.ip_forward = 1
+```
+If it’s set to 0, forwarding is disabled and needs to be enabled manually.
+```bash
+$ sysctl -w net.ipv4.ip_forward=1
+```
+If you set `--ip-forward=true` when starting the Docker service, Docker will automatically set the system’s `ip_forward` parameter to 1.
+
+## Inter-Container Access
+Access between containers requires two things:
+* The network topology of the containers is interconnected. By default, all containers are connected to the `docker0` bridge.
+* The local system’s firewall software, `iptables`, allows traffic through.
+
+### Accessing All Ports
+When starting the Docker service (`dockerd`), a forwarding rule is added to the FORWARD chain in the local `iptables` by default. Whether the policy is set to allow (`ACCEPT`) or deny (`DROP`) depends on the `--icc=true` (default) or `--icc=false` setting. If `--iptables=false` is specified, no `iptables` rules are added.
+
+By default, network communication between different containers is permitted. For security reasons, you can disable it by setting `{"icc": false}` in the `/etc/docker/daemon.json` file.
+
+### Accessing Specific Ports
+After disabling network access with `-icc=false`, you can still access open ports by using the `--link=CONTAINER_NAME:ALIAS` option.
+
+For example, when starting the Docker service, you can use both `icc=false` and `--iptables=true` parameters to disable inter-container network access while allowing Docker to modify the system’s `iptables` rules.
+
+In this case, the system’s `iptables` rules might look like this:
+```bash
+$ sudo iptables -nL
+...
+Chain FORWARD (policy ACCEPT)
+target     prot opt source               destination
+DROP       all  --  0.0.0.0/0            0.0.0.0/0
+...
+```
+
+Then, when starting a container (`docker run`) with the `--link=CONTAINER_NAME:ALIAS` option, Docker will add an `ACCEPT` rule to `iptables` for both containers, allowing them to access each other's open ports (according to the `EXPOSE` directive in the `Dockerfile`).
+
+When using the `--link=CONTAINER_NAME:ALIAS` option, the `iptables` rules will be updated:
+```bash
+$ sudo iptables -nL
+...
+Chain FORWARD (policy ACCEPT)
+target     prot opt source               destination
+ACCEPT     tcp  --  172.17.0.2           172.17.0.3           tcp spt:80
+ACCEPT     tcp  --  172.17.0.3           172.17.0.2           tcp dpt:80
+DROP       all  --  0.0.0.0/0            0.0.0.0/0
+```
+
+Note: In `--link=CONTAINER_NAME:ALIAS`, `CONTAINER_NAME` must currently be the name assigned by Docker or a name specified using the `--name` option. Hostnames will not be recognized.
+
+
+----------------------------------------------
+
+
+
+# التحكم في وصول الحاويات
+
+يتم إدارة التحكم في وصول الحاويات بشكل أساسي من خلال جدار الحماية `iptables` على نظام Linux. يعتبر `iptables` جدار الحماية الافتراضي في Linux ويأتي مثبتاً مسبقاً في معظم التوزيعات.
+
+## وصول الحاوية إلى الشبكات الخارجية
+لكي تتمكن الحاويات من الوصول إلى الشبكات الخارجية، يجب أن يدعم النظام المحلي عملية التوجيه. في نظام Linux، يمكن التحقق من تمكين التوجيه على النحو التالي:
+
+```bash
+$ sysctl net.ipv4.ip_forward
+net.ipv4.ip_forward = 1
+```
+إذا كانت القيمة 0، فهذا يعني أن التوجيه معطل ويحتاج إلى التمكين يدوياً:
+```bash
+$ sysctl -w net.ipv4.ip_forward=1
+```
+عند ضبط `--ip-forward=true` أثناء تشغيل خدمة Docker، سيتم ضبط النظام تلقائياً على تفعيل التوجيه (`ip_forward` = 1).
+
+## الوصول بين الحاويات
+يستلزم الوصول بين الحاويات جانبين:
+* أن تكون البنية التحتية للشبكة بين الحاويات مترابطة. افتراضياً، يتم ربط جميع الحاويات بجسر `docker0`.
+* أن يسمح جدار الحماية في النظام المحلي - `iptables` - بمرور البيانات.
+
+### الوصول إلى جميع المنافذ
+عند تشغيل خدمة Docker (`dockerd`)، يتم إضافة قاعدة توجيه إلى سلسلة FORWARD في `iptables` بالنظام المحلي بشكل افتراضي. يتم ضبط السياسة على القبول (`ACCEPT`) أو الرفض (`DROP`) بناءً على إعداد `--icc=true` (افتراضي) أو `--icc=false`. إذا تم تحديد `--iptables=false`، فلن يتم إضافة قواعد `iptables`.
+
+بشكل افتراضي، يُسمح بالتواصل بين الحاويات المختلفة. لأسباب أمنية، يمكنك تعطيل ذلك بإضافة `{"icc": false}` في ملف `/etc/docker/daemon.json`.
+
+### الوصول إلى منافذ محددة
+بعد إيقاف الوصول الشبكي باستخدام `-icc=false`، يمكن الوصول إلى المنافذ المفتوحة باستخدام الخيار `--link=CONTAINER_NAME:ALIAS`.
+
+على سبيل المثال، عند تشغيل خدمة Docker، يمكن استخدام المعاملين `icc=false` و`--iptables=true` معاً لتعطيل الوصول الشبكي بين الحاويات والسماح لـ Docker بتعديل قواعد `iptables` في النظام.
+
+في هذه الحالة، قد تظهر قواعد `iptables` في النظام كما يلي:
+```bash
+$ sudo iptables -nL
+...
+Chain FORWARD (policy ACCEPT)
+target     prot opt source               destination
+DROP       all  --  0.0.0.0/0            0.0.0.0/0
+...
+```
+
+بعد ذلك، عند تشغيل الحاوية (`docker run`) باستخدام الخيار `--link=CONTAINER_NAME:ALIAS`، سيضيف Docker قاعدة `ACCEPT` في `iptables` للحاويتين، مما يسمح لهما بالوصول إلى المنافذ المفتوحة لبعضهما البعض (حسب تعليمات `EXPOSE` في `Dockerfile`).
+
+عند إضافة الخيار `--link=CONTAINER_NAME:ALIAS`، سيتم تحديث قواعد `iptables` على النحو التالي:
+```bash
+$ sudo iptables -nL
+...
+Chain FORWARD (policy ACCEPT)
+target     prot opt source               destination
+ACCEPT     tcp  --  172.17.0.2           172.17.0.3           tcp spt:80
+ACCEPT     tcp  --  172.17.0.3           172.17.0.2           tcp dpt:80
+DROP       all  --  0.0.0.0/0            0.0.0.0/0
+```
+
+ملاحظة: في `--link=CONTAINER_NAME:ALIAS` يجب أن يكون `CONTAINER_NAME` هو الاسم الذي تم تخصيصه بواسطة Docker أو الاسم المحدد باستخدام الخيار `--name`. أسماء المضيف لن يتم التعرف عليها.
